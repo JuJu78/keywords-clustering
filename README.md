@@ -35,7 +35,7 @@
         ```
         pip install -r requirements.txt
         ```
-    5. **Run the Streamlit application**:
+    5. **Run the Streamlit application in a terminal**:
         ```
         streamlit run cluster.py
         ```
