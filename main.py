@@ -226,7 +226,7 @@ def create_knowledge_graph(cluster_names, valid_clusters, cluster_centers, df):
         directed=True,
         nodeHighlightBehavior=True,
         staticGraphWithDragAndDrop=True,
-        physics=True,  # Enables the physics engine for better layout
+        physics=False,  # Enables the physics engine for better layout
         hierarchical=False,
         graphBackground="black",  # Set the background to black
         node={'highlightStrokeColor': 'red'},
