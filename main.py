@@ -57,8 +57,9 @@ def get_embeddings(keywords):
 def read_excel(file):
     return pd.read_excel(file)
 
-
 # Function to perform clustering and add columns
+
+
 def add_cluster_columns(df, keyword_column):
     keywords = df[keyword_column].tolist()
 
@@ -181,8 +182,9 @@ def get_cluster_name(keywords, max_keywords=50):
     cluster_name = response.choices[0].message.content.strip()
     return cluster_name
 
-
 # Function to write the modified DataFrame to an Excel file
+
+
 def write_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -190,14 +192,19 @@ def write_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-
 # Function to create an interactive knowledge graph using streamlit-agraph
+
+
 def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df, keyword_column, vectors):
     G = nx.DiGraph()
 
     # Add nodes for clusters
     for cluster_name in cluster_names:
         G.add_node(cluster_name, label=cluster_name, node_type='cluster')
+
+    # Determine the most representative cluster (the one with the most keywords)
+    representative_cluster = max(
+        valid_clusters, key=lambda cluster: len(df[df['Cluster'] == cluster]))
 
     # Add nodes and edges for keywords within clusters
     for cluster_name, cluster in zip(cluster_names, valid_clusters):
@@ -214,10 +221,12 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
         # Sort the keywords in the cluster by similarity in descending order
         similarities = sorted(similarities, key=lambda x: x[1], reverse=True)
 
-        # Only include top 5 keywords in graph
-        for idx, (keyword, similarity) in enumerate(similarities[:5]):
+        # Only include the top keyword in the graph
+        if similarities:
+            keyword, similarity = similarities[0]
             label = f"{keyword} ({similarity:.2f}%)"
-            G.add_node(keyword, label=label, node_type='keyword')
+            color = 'red' if cluster == representative_cluster else 'blue'
+            G.add_node(keyword, label=label, node_type='keyword', color=color)
             G.add_edge(cluster_name, keyword)
 
     # Add edges between clusters based on cosine similarity
@@ -232,7 +241,7 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
 
     # Convert the NetworkX graph into a list of nodes and edges for streamlit-agraph
     nodes = [Node(id=node, label=G.nodes[node]['label'], size=25 if G.nodes[node]['node_type'] == 'cluster' else 15,
-                  color='blue' if G.nodes[node]['node_type'] == 'cluster' else 'green') for node in G.nodes]
+                  color=G.nodes[node].get('color', 'green')) for node in G.nodes]
     edges = [Edge(source=edge[0], target=edge[1],
                   label=G.edges[edge].get('label', '')) for edge in G.edges]
 
@@ -285,11 +294,18 @@ if uploaded_file is not None:
     if st.button("Lancer"):
         new_df, cluster_names, valid_clusters, cosine_sim_matrix, vectors, cluster_sim_df = add_cluster_columns(
             df, keyword_column)
+        st.session_state['new_df'] = new_df
+        st.session_state['cluster_names'] = cluster_names
+        st.session_state['valid_clusters'] = valid_clusters
+        st.session_state['cosine_sim_matrix'] = cosine_sim_matrix
+        st.session_state['vectors'] = vectors
+        st.session_state['cluster_sim_df'] = cluster_sim_df
 
+    if 'new_df' in st.session_state:
         st.write("Processed Data")
-        st.dataframe(new_df)
+        st.dataframe(st.session_state['new_df'])
 
-        processed_file = write_excel(new_df)
+        processed_file = write_excel(st.session_state['new_df'])
 
         st.download_button(
             label="Download Processed Excel",
@@ -299,9 +315,10 @@ if uploaded_file is not None:
         )
 
         st.write("Cluster Cosine Similarity DataFrame")
-        st.dataframe(cluster_sim_df, use_container_width=True)
+        st.dataframe(
+            st.session_state['cluster_sim_df'], use_container_width=True)
 
-        similarity_file = write_excel(cluster_sim_df)
+        similarity_file = write_excel(st.session_state['cluster_sim_df'])
 
         st.download_button(
             label="Download Cosine Similarity Excel",
@@ -312,5 +329,5 @@ if uploaded_file is not None:
 
         st.write("Creating knowledge graph...")
         nodes, edges, config = create_knowledge_graph(
-            cluster_names, valid_clusters, cosine_sim_matrix, df, keyword_column, vectors)
+            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cosine_sim_matrix'], df, keyword_column, st.session_state['vectors'])
         agraph(nodes=nodes, edges=edges, config=config)
