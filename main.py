@@ -10,7 +10,6 @@ import streamlit as st
 from streamlit_agraph import agraph, Node, Edge, Config
 import networkx as nx
 
-
 st.set_page_config(layout='wide')
 
 # Sidebar for user inputs
@@ -195,53 +194,31 @@ def write_excel(df):
 # Function to create an interactive knowledge graph using streamlit-agraph
 
 
-def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df, keyword_column, vectors):
+def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df, vectors):
     G = nx.DiGraph()
 
     # Add nodes for clusters
     for cluster_name in cluster_names:
         G.add_node(cluster_name, label=cluster_name, node_type='cluster')
 
-    # Determine the most representative cluster (the one with the most keywords)
-    representative_cluster = max(
-        valid_clusters, key=lambda cluster: len(df[df['Cluster'] == cluster]))
-
-    # Add nodes and edges for keywords within clusters
-    for cluster_name, cluster in zip(cluster_names, valid_clusters):
-        cluster_indices = df[df['Cluster'] == cluster].index.tolist()
-        cluster_center = np.mean([vectors[idx]
-                                 for idx in cluster_indices], axis=0)
-        similarities = []
-        for idx in cluster_indices:
-            similarity = cosine_similarity(
-                [vectors[idx]], [cluster_center])[0][0] * 100
-            keyword = df.iloc[idx][keyword_column]
-            similarities.append((keyword, similarity))
-
-        # Sort the keywords in the cluster by similarity in descending order
-        similarities = sorted(similarities, key=lambda x: x[1], reverse=True)
-
-        # Only include the top keyword in the graph
-        if similarities:
-            keyword, similarity = similarities[0]
-            label = f"{keyword} ({similarity:.2f}%)"
-            color = 'red' if cluster == representative_cluster else 'blue'
-            G.add_node(keyword, label=label, node_type='keyword', color=color)
-            G.add_edge(cluster_name, keyword)
+    # Determine the most representative cluster (the one with the smallest average distance to other clusters)
+    representative_cluster_idx = min(
+        range(len(valid_clusters)), key=lambda i: np.mean(cosine_sim_matrix[i]))
+    representative_cluster = valid_clusters[representative_cluster_idx]
 
     # Add edges between clusters based on cosine similarity
     for i, cluster1 in enumerate(valid_clusters):
         for j, cluster2 in enumerate(valid_clusters):
             if i != j:
-                similarity = cosine_similarity([cosine_sim_matrix[cluster1]], [
-                                               cosine_sim_matrix[cluster2]])[0][0]
-                if similarity > 0.7:  # You can adjust this threshold as needed
+                similarity = cosine_similarity(
+                    [vectors[i]], [vectors[j]])[0][0]
+                if similarity > 0.7:  # Adjust this threshold as needed
                     G.add_edge(cluster_names[i], cluster_names[j],
                                weight=similarity, label=f'{similarity:.2f}%')
 
     # Convert the NetworkX graph into a list of nodes and edges for streamlit-agraph
-    nodes = [Node(id=node, label=G.nodes[node]['label'], size=25 if G.nodes[node]['node_type'] == 'cluster' else 15,
-                  color=G.nodes[node].get('color', 'green')) for node in G.nodes]
+    nodes = [Node(id=cluster_name, label=cluster_name, size=35 if cluster == representative_cluster else 25,
+                  color='red' if cluster == representative_cluster else 'blue') for cluster_name, cluster in zip(cluster_names, valid_clusters)]
     edges = [Edge(source=edge[0], target=edge[1],
                   label=G.edges[edge].get('label', '')) for edge in G.edges]
 
@@ -302,7 +279,8 @@ if uploaded_file is not None:
         st.session_state['cluster_sim_df'] = cluster_sim_df
 
     if 'new_df' in st.session_state:
-        st.write("Processed Data")
+        st.write(
+            f"Number of Clusters: {len(st.session_state['valid_clusters'])}")
         st.dataframe(st.session_state['new_df'])
 
         processed_file = write_excel(st.session_state['new_df'])
@@ -329,5 +307,5 @@ if uploaded_file is not None:
 
         st.write("Creating knowledge graph...")
         nodes, edges, config = create_knowledge_graph(
-            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cosine_sim_matrix'], df, keyword_column, st.session_state['vectors'])
+            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cosine_sim_matrix'], df, st.session_state['vectors'])
         agraph(nodes=nodes, edges=edges, config=config)
