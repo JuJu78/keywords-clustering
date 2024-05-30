@@ -14,17 +14,17 @@ import networkx as nx
 st.set_page_config(layout='wide')
 
 # Sidebar for user inputs
-st.sidebar.title('Configuration')
+st.sidebar.title('Paramètres')
 
 api_key = st.sidebar.text_input('OpenAI API Key', type='password')
 embedding_model = st.sidebar.selectbox(
     'Embedding Model',
-    options=["text-embedding-3-large",
-             "text-embedding-3-small", "text-embedding-ada-002"]
+    options=["text-embedding-3-small",
+             "text-embedding-3-large", "text-embedding-ada-002"]
 )
 clustering_model = st.sidebar.selectbox(
     "Choisissez le modèle de clustering",
-    options=["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+    options=["gpt-3.5-turbo", "gpt-4o", "gpt-4-turbo", "gpt-4"]
 )
 eps = st.sidebar.slider('eps value for DBSCAN', 0.0, 1.0, 0.3)
 min_samples = st.sidebar.slider('min_samples value for DBSCAN', 1, 100, 5)
@@ -57,9 +57,8 @@ def get_embeddings(keywords):
 def read_excel(file):
     return pd.read_excel(file)
 
+
 # Function to perform clustering and add columns
-
-
 def add_cluster_columns(df, keyword_column):
     keywords = df[keyword_column].tolist()
 
@@ -97,7 +96,12 @@ def add_cluster_columns(df, keyword_column):
         # Check if the cluster has at least 5 keywords
         if len(cluster_keywords) >= 5:
             valid_clusters.append(cluster)
-            cluster_name = get_cluster_name(cluster_keywords)
+            # Sort keywords by similarity to cluster center and take the top 50
+            similarities = [(keywords[idx], cosine_similarity([vectors[idx]], [
+                             cluster_center])[0][0]) for idx in cluster_indices]
+            sorted_keywords = [keyword for keyword, similarity in sorted(
+                similarities, key=lambda x: x[1], reverse=True)]
+            cluster_name = get_cluster_name(sorted_keywords, max_keywords=50)
             cluster_names.append(cluster_name)
 
     # Clean cluster names
@@ -163,10 +167,11 @@ def add_cluster_columns(df, keyword_column):
 
     return new_df, cluster_names, valid_clusters, cosine_sim_matrix, vectors, cluster_sim_df
 
-
 # Function to get cluster name using OpenAI
-def get_cluster_name(keywords):
-    prompt = cluster_label_prompt + ', '.join(keywords)
+
+
+def get_cluster_name(keywords, max_keywords=50):
+    prompt = cluster_label_prompt + ', '.join(keywords[:max_keywords])
     response = openai_client.chat.completions.create(
         model=clustering_model,
         messages=[
@@ -246,10 +251,11 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
 
 
 # Streamlit app
-st.title('Keyword Clustering by Similarity')
+st.title('Keywords Clustering')
 
 with st.expander("À propos"):
     st.markdown("""
+    Cette application a été créée sur la base d'un script développé par [Loïc Hélias](https://www.linkedin.com/in/loichelias/), leader SEO chez Décathlon, accessible [ici](https://github.com/lassomontana/check-keyword-similarity).
     ### À quoi sert cette application ?
     Cette application permet de traiter et de regrouper une liste de mots-clés en fonction de leur similarité sémantique. Elle utilise l'API OpenAI pour générer des embeddings et l'algorithme DBSCAN pour effectuer le clustering.
 
