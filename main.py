@@ -230,7 +230,7 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
         # This makes the graph static but allows dragging and dropping
         staticGraphWithDragAndDrop=True,
         physics=False,  # Enables the physics engine for better layout
-        hierarchical=True,
+        hierarchical=False,
     )
 
     return nodes, edges, config
