@@ -10,8 +10,6 @@ import streamlit as st
 from streamlit_agraph import agraph, Node, Edge, Config
 import networkx as nx
 
-# Load environment variables from .env file
-load_dotenv()
 
 st.set_page_config(layout='wide')
 
