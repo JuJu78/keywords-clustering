@@ -195,7 +195,7 @@ def write_excel(df):
 
 
 def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df, vectors):
-    G = nx.DiGraph()
+    G = nx.Graph()
 
     # Add nodes for clusters
     for cluster_name in cluster_names:
@@ -203,7 +203,7 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
 
     # Determine the most representative cluster (the one with the smallest average distance to other clusters)
     representative_cluster_idx = min(
-        range(len(valid_clusters)), key=lambda i: np.mean(cosine_sim_matrix[i]))
+        range(len(valid_clusters)), key=lambda i: np.mean([cosine_sim_matrix[i][j] for j in range(len(valid_clusters)) if i != j]))
     representative_cluster = valid_clusters[representative_cluster_idx]
 
     # Add edges between clusters based on cosine similarity
@@ -211,10 +211,9 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
         for j, cluster2 in enumerate(valid_clusters):
             if i != j:
                 similarity = cosine_similarity(
-                    [vectors[i]], [vectors[j]])[0][0]
-                if similarity > 0.7:  # Adjust this threshold as needed
-                    G.add_edge(cluster_names[i], cluster_names[j],
-                               weight=similarity, label=f'{similarity:.2f}%')
+                    [vectors[cluster1]], [vectors[cluster2]])[0][0]
+                G.add_edge(cluster_names[i], cluster_names[j],
+                           weight=similarity, label=f'{similarity:.2f}%')
 
     # Convert the NetworkX graph into a list of nodes and edges for streamlit-agraph
     nodes = [Node(id=cluster_name, label=cluster_name, size=35 if cluster == representative_cluster else 25,
@@ -230,7 +229,8 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
         nodeHighlightBehavior=True,
         # This makes the graph static but allows dragging and dropping
         staticGraphWithDragAndDrop=True,
-        physics=False,  # Disables the physics engine for more stability
+        physics=True,  # Enables the physics engine for better layout
+        hierarchical=False,
     )
 
     return nodes, edges, config
