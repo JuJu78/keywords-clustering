@@ -1,7 +1,6 @@
 import numpy as np
 from openai import OpenAI
 import io
-from openpyxl.styles import PatternFill
 from openpyxl import load_workbook
 from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
@@ -93,16 +92,14 @@ def add_cluster_columns(df, keyword_column):
                                  for idx in cluster_indices], axis=0)
         cluster_centers[cluster] = cluster_center
 
-        # Check if the cluster has at least 5 keywords
-        if len(cluster_keywords) >= 5:
-            valid_clusters.append(cluster)
-            # Sort keywords by similarity to cluster center and take the top 50
-            similarities = [(keywords[idx], cosine_similarity([vectors[idx]], [
-                             cluster_center])[0][0]) for idx in cluster_indices]
-            sorted_keywords = [keyword for keyword, similarity in sorted(
-                similarities, key=lambda x: x[1], reverse=True)]
-            cluster_name = get_cluster_name(sorted_keywords, max_keywords=50)
-            cluster_names.append(cluster_name)
+        valid_clusters.append(cluster)
+        # Sort keywords by similarity to cluster center and take the top 50
+        similarities = [(keywords[idx], cosine_similarity([vectors[idx]], [
+                         cluster_center])[0][0]) for idx in cluster_indices]
+        sorted_keywords = [keyword for keyword, similarity in sorted(
+            similarities, key=lambda x: x[1], reverse=True)]
+        cluster_name = get_cluster_name(sorted_keywords, max_keywords=50)
+        cluster_names.append(cluster_name)
 
     # Clean cluster names
     cluster_names = [name.strip().replace('"', '').replace("'", '')
@@ -165,7 +162,7 @@ def add_cluster_columns(df, keyword_column):
     cluster_sim_df = pd.DataFrame(cluster_similarities, columns=[
                                   'Cluster 1', 'Cluster 2', 'Cosine Similarity'])
 
-    return new_df, cluster_names, valid_clusters, cosine_sim_matrix, vectors, cluster_sim_df
+    return new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df
 
 # Function to get cluster name using OpenAI
 
@@ -194,7 +191,7 @@ def write_excel(df):
 # Function to create an interactive knowledge graph using streamlit-agraph
 
 
-def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df, vectors):
+def create_knowledge_graph(cluster_names, valid_clusters, cluster_centers, df):
     G = nx.Graph()
 
     # Add nodes for clusters
@@ -203,15 +200,16 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
 
     # Determine the most representative cluster (the one with the smallest average distance to other clusters)
     representative_cluster_idx = min(
-        range(len(valid_clusters)), key=lambda i: np.mean([cosine_sim_matrix[i][j] for j in range(len(valid_clusters)) if i != j]))
+        range(len(valid_clusters)), key=lambda i: np.mean([cosine_similarity([cluster_centers[i]], [cluster_centers[j]])[0][0] for j in range(len(valid_clusters)) if i != j])
+    )
     representative_cluster = valid_clusters[representative_cluster_idx]
 
     # Add edges between clusters based on cosine similarity
     for i, cluster1 in enumerate(valid_clusters):
         for j, cluster2 in enumerate(valid_clusters):
             if i != j:
-                similarity = cosine_similarity(
-                    [vectors[cluster1]], [vectors[cluster2]])[0][0]
+                similarity = cosine_similarity([cluster_centers[cluster1]], [
+                                               cluster_centers[cluster2]])[0][0]
                 G.add_edge(cluster_names[i], cluster_names[j],
                            weight=similarity, label=f'{similarity:.2f}%')
 
@@ -227,10 +225,12 @@ def create_knowledge_graph(cluster_names, valid_clusters, cosine_sim_matrix, df,
         height=1000,
         directed=True,
         nodeHighlightBehavior=True,
-        # This makes the graph static but allows dragging and dropping
         staticGraphWithDragAndDrop=True,
-        physics=False,  # Enables the physics engine for better layout
+        physics=True,  # Enables the physics engine for better layout
         hierarchical=False,
+        graphBackground="black",  # Set the background to black
+        node={'highlightStrokeColor': 'red'},
+        link={'highlightColor': 'red'}
     )
 
     return nodes, edges, config
@@ -269,13 +269,12 @@ if uploaded_file is not None:
         "Select the column containing keywords", options=df.columns)
 
     if st.button("Lancer"):
-        new_df, cluster_names, valid_clusters, cosine_sim_matrix, vectors, cluster_sim_df = add_cluster_columns(
+        new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df = add_cluster_columns(
             df, keyword_column)
         st.session_state['new_df'] = new_df
         st.session_state['cluster_names'] = cluster_names
         st.session_state['valid_clusters'] = valid_clusters
-        st.session_state['cosine_sim_matrix'] = cosine_sim_matrix
-        st.session_state['vectors'] = vectors
+        st.session_state['cluster_centers'] = cluster_centers
         st.session_state['cluster_sim_df'] = cluster_sim_df
 
     if 'new_df' in st.session_state:
@@ -307,5 +306,5 @@ if uploaded_file is not None:
 
         st.write("Creating knowledge graph...")
         nodes, edges, config = create_knowledge_graph(
-            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cosine_sim_matrix'], df, st.session_state['vectors'])
+            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cluster_centers'], df)
         agraph(nodes=nodes, edges=edges, config=config)
