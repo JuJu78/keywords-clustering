@@ -1,4 +1,4 @@
-numpy==1.19.3
+numpy==1.23.2
 openai==1.30.4
 pandas==2.2.2
 openpyxl==3.0.7
