@@ -6,19 +6,44 @@ from sklearn.cluster import DBSCAN
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
 import streamlit as st
-from streamlit_agraph import agraph, Node, Edge, Config
+from pyvis.network import Network
 import networkx as nx
+import streamlit.components.v1 as components
+import random
+from transformers import AutoTokenizer, AutoModel
+import torch
 
+sidebar_logo = "keyword_clustering_logo.png"
 st.set_page_config(layout='wide')
 
 # Sidebar for user inputs
+st.logo(sidebar_logo)
 st.sidebar.title('Paramètres')
 
 api_key = st.sidebar.text_input('OpenAI API Key', type='password')
+embedding_source = st.sidebar.selectbox(
+    'Source des Embeddings',
+    options=["OpenAI", "Hugging Face"]
+)
 embedding_model = st.sidebar.selectbox(
-    'Embedding Model',
+    'OpenAI Embedding Model',
     options=["text-embedding-3-small",
-             "text-embedding-3-large", "text-embedding-ada-002"]
+             "text-embedding-3-large", "text-embedding-ada-002"],
+    disabled=embedding_source != "OpenAI"
+)
+hf_model_name = st.sidebar.selectbox(
+    'Hugging Face Model Name',
+    options=[
+        'sentence-transformers/all-MiniLM-L6-v2',
+        'sentence-transformers/paraphrase-MiniLM-L3-v2',
+        'sentence-transformers/paraphrase-mpnet-base-v2',
+        'sentence-transformers/distilbert-base-nli-mean-tokens',
+        'sentence-transformers/stsb-roberta-large',
+        'distilbert-base-uncased',
+        'bert-base-uncased',
+        'Salesforce/SFR-Embedding-Mistral'
+    ],
+    disabled=embedding_source != "Hugging Face"
 )
 clustering_model = st.sidebar.selectbox(
     "Choisissez le modèle de clustering",
@@ -38,16 +63,25 @@ st.sidebar.markdown("""
 - **min_samples** : Le nombre minimum d'échantillons dans un voisinage pour qu'un point soit considéré comme un point central. Plus la valeur de min_samples est grande, plus les clusters seront denses.
 """)
 
-# Function to get embeddings from OpenAI
+# Function to get embeddings from OpenAI or Hugging Face
 openai_client = OpenAI(api_key=api_key)
 
 
 def get_embeddings(keywords):
-    response = openai_client.embeddings.create(
-        model=embedding_model,
-        input=keywords,
-    )
-    return [embedding.embedding for embedding in response.data]
+    if embedding_source == "OpenAI":
+        response = openai_client.embeddings.create(
+            model=embedding_model,
+            input=keywords,
+        )
+        return [embedding.embedding for embedding in response.data]
+    elif embedding_source == "Hugging Face":
+        tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
+        model = AutoModel.from_pretrained(hf_model_name)
+        inputs = tokenizer(keywords, padding=True,
+                           truncation=True, return_tensors="pt")
+        with torch.no_grad():
+            outputs = model(**inputs)
+        return outputs.last_hidden_state.mean(dim=1).numpy()
 
 # Function to read the Excel file
 
@@ -61,7 +95,7 @@ def read_excel(file):
 def add_cluster_columns(df, keyword_column):
     keywords = df[keyword_column].tolist()
 
-    # Get embeddings from OpenAI
+    # Get embeddings from OpenAI or Hugging Face
     embeddings = get_embeddings(keywords)
     vectors = np.array(embeddings)
 
@@ -162,7 +196,24 @@ def add_cluster_columns(df, keyword_column):
     cluster_sim_df = pd.DataFrame(cluster_similarities, columns=[
                                   'Cluster 1', 'Cluster 2', 'Cosine Similarity'])
 
-    return new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df
+    # Add cluster keyword counts to the similarity DataFrame
+    cluster_keyword_counts = []
+    for i, cluster1 in enumerate(valid_clusters):
+        for j, cluster2 in enumerate(valid_clusters):
+            if i != j:
+                count_cluster1 = cluster_counts[cluster1]
+                count_cluster2 = cluster_counts[cluster2]
+                cluster_keyword_counts.append(
+                    [cluster_names[i], cluster_names[j], count_cluster1, count_cluster2])
+
+    count_df = pd.DataFrame(cluster_keyword_counts, columns=[
+                            'Cluster 1', 'Cluster 2', 'Keywords in Cluster 1', 'Keywords in Cluster 2'])
+
+    # Merge the similarity DataFrame with the keyword counts DataFrame
+    cluster_sim_df = pd.merge(cluster_sim_df, count_df, on=[
+                              'Cluster 1', 'Cluster 2'])
+
+    return new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df, vectors
 
 # Function to get cluster name using OpenAI
 
@@ -188,52 +239,126 @@ def write_excel(df):
     processed_data = output.getvalue()
     return processed_data
 
-# Function to create an interactive knowledge graph using streamlit-agraph
 
+# Function to create an interactive knowledge graph using Pyvis
+@st.cache_resource
+def create_knowledge_graph(cluster_names, valid_clusters, cluster_centers, df, vectors, keyword_column):
+    net = Network(height='800px', width='100%', bgcolor='#000000',
+                  font_color='#FFFFFF', notebook=False)
 
-def create_knowledge_graph(cluster_names, valid_clusters, cluster_centers, df):
-    G = nx.Graph()
+    # Generate a list of unique fluorescent colors for each cluster
+    fluorescent_colors = [
+        '#39FF14',  # Bright green
+        '#FF007F',  # Bright pink
+        '#FFAA1D',  # Bright orange
+        '#00FFFF',  # Bright cyan
+        '#FF00FF',  # Bright magenta
+        '#FFFF00',  # Bright yellow
+        '#00FF00',  # Bright lime
+        '#7FFF00',  # Bright chartreuse
+        '#FF4500',  # Bright orange-red
+        '#FF1493'   # Bright deep pink
+    ]
+
+    # Ensure there are enough colors for all clusters
+    colors = [fluorescent_colors[i %
+                                 len(fluorescent_colors)] for i in range(len(valid_clusters))]
 
     # Add nodes for clusters
-    for cluster_name in cluster_names:
-        G.add_node(cluster_name, label=cluster_name, node_type='cluster')
+    for idx, (cluster_name, cluster) in enumerate(zip(cluster_names, valid_clusters)):
+        keywords = df[df['Cluster'] == cluster][keyword_column].tolist(
+        ) if 'Cluster' in df.columns else []
+        title = f"Number of keywords: {len(keywords)}<br>" + "<br>".join(
+            [f"{keyword} ({float(cosine_similarity([vectors[idx]], [cluster_centers[cluster]])[0][0]):.2f})" for keyword in keywords[:10]])
+        size = min(10 + len(keywords) * 2, 50)
+        color = colors[idx]
+        net.add_node(cluster_name, label=cluster_name,
+                     title=title, color=color, size=size)
 
-    # Determine the most representative cluster (the one with the smallest average distance to other clusters)
-    representative_cluster_idx = min(
-        range(len(valid_clusters)), key=lambda i: np.mean([cosine_similarity([cluster_centers[i]], [cluster_centers[j]])[0][0] for j in range(len(valid_clusters)) if i != j])
-    )
-    representative_cluster = valid_clusters[representative_cluster_idx]
-
-    # Add edges between clusters based on cosine similarity
+    # Add edges for clusters based on cosine similarity
     for i, cluster1 in enumerate(valid_clusters):
         for j, cluster2 in enumerate(valid_clusters):
             if i != j:
-                similarity = cosine_similarity([cluster_centers[cluster1]], [
-                                               cluster_centers[cluster2]])[0][0]
-                G.add_edge(cluster_names[i], cluster_names[j],
-                           weight=similarity, label=f'{similarity:.2f}%')
+                similarity = float(cosine_similarity(
+                    [cluster_centers[cluster1]], [cluster_centers[cluster2]])[0][0])
+                net.add_edge(cluster_names[i], cluster_names[j], value=similarity,
+                             title=f'Similarity: {similarity:.2f}', hidden=True)
 
-    # Convert the NetworkX graph into a list of nodes and edges for streamlit-agraph
-    nodes = [Node(id=cluster_name, label=cluster_name, size=35 if cluster == representative_cluster else 25,
-                  color='red' if cluster == representative_cluster else 'blue') for cluster_name, cluster in zip(cluster_names, valid_clusters)]
-    edges = [Edge(source=edge[0], target=edge[1],
-                  label=G.edges[edge].get('label', '')) for edge in G.edges]
+    net.set_options("""
+    var options = {
+      "nodes": {
+        "borderWidth": 1,
+        "borderWidthSelected": 2,
+        "font": {
+          "size": 30
+        },
+        "shape": "dot",
+        "scaling": {
+          "min": 10,
+          "max": 50
+        }
+      },
+      "edges": {
+        "color": {
+          "inherit": true
+        },
+        "smooth": {
+          "type": "continuous",
+          "forceDirection": "none",
+          "roundness": 0
+        }
+      },
+      "physics": {
+        "enabled": true,
+        "barnesHut": {
+          "gravitationalConstant": -20000,
+          "centralGravity": 0.3,
+          "springLength": 800,
+          "springConstant": 0.04,
+          "damping": 0.09,
+          "avoidOverlap": 1
+        },
+        "minVelocity": 0.75
+      },
+      "interaction": {
+        "tooltipDelay": 100,
+        "hover": true,
+        "hideEdgesOnDrag": false,
+        "navigationButtons": true,
+        "selectConnectedEdges": false
+      }
+    }
+    """)
 
-    # Create a configuration for the graph
-    config = Config(
-        width=2000,
-        height=1000,
-        directed=True,
-        nodeHighlightBehavior=True,
-        staticGraphWithDragAndDrop=True,
-        physics=False,  # Enables the physics engine for better layout
-        hierarchical=False,
-        graphBackground="black",  # Set the background to black
-        node={'highlightStrokeColor': 'red'},
-        link={'highlightColor': 'red'}
-    )
+    # Save the initial HTML file
+    net.save_graph('knowledge_graph.html')
 
-    return nodes, edges, config
+    # Define custom JavaScript to show edges on node select
+    custom_js = """
+    <script type="text/javascript">
+        var edges = network.body.data.edges.get();
+        network.on("click", function (params) {
+            if (params.nodes.length > 0) {
+                var nodeId = params.nodes[0];
+                var connectedEdges = network.getConnectedEdges(nodeId);
+                network.body.data.edges.update(connectedEdges.map(function(edge) {
+                    return {id: edge, hidden: false};
+                }));
+            }
+        });
+    </script>
+    """
+
+    # Insert custom JS into the HTML file
+    with open('knowledge_graph.html', 'r', encoding='utf-8') as file:
+        html_content = file.read()
+
+    html_content = html_content.replace("</body>", custom_js + "</body>")
+
+    with open('knowledge_graph.html', 'w', encoding='utf-8') as file:
+        file.write(html_content)
+
+    return net
 
 
 # Streamlit app
@@ -269,13 +394,17 @@ if uploaded_file is not None:
         "Select the column containing keywords", options=df.columns)
 
     if st.button("Lancer"):
-        new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df = add_cluster_columns(
-            df, keyword_column)
-        st.session_state['new_df'] = new_df
-        st.session_state['cluster_names'] = cluster_names
-        st.session_state['valid_clusters'] = valid_clusters
-        st.session_state['cluster_centers'] = cluster_centers
-        st.session_state['cluster_sim_df'] = cluster_sim_df
+        if embedding_source == "OpenAI" and not api_key:
+            st.warning("Veuillez entrer votre clé API OpenAI.")
+        else:
+            new_df, cluster_names, valid_clusters, cluster_centers, cluster_sim_df, vectors = add_cluster_columns(
+                df, keyword_column)
+            st.session_state['new_df'] = new_df
+            st.session_state['cluster_names'] = cluster_names
+            st.session_state['valid_clusters'] = valid_clusters
+            st.session_state['cluster_centers'] = cluster_centers
+            st.session_state['cluster_sim_df'] = cluster_sim_df
+            st.session_state['vectors'] = vectors
 
     if 'new_df' in st.session_state:
         st.write(
@@ -305,6 +434,11 @@ if uploaded_file is not None:
         )
 
         st.write("Creating knowledge graph...")
-        nodes, edges, config = create_knowledge_graph(
-            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state['cluster_centers'], df)
-        agraph(nodes=nodes, edges=edges, config=config)
+        net = create_knowledge_graph(
+            st.session_state['cluster_names'], st.session_state['valid_clusters'], st.session_state[
+                'cluster_centers'], df, st.session_state['vectors'], keyword_column
+        )
+
+        net.save_graph('knowledge_graph.html')
+        HtmlFile = open('knowledge_graph.html', 'r', encoding='utf-8')
+        components.html(HtmlFile.read(), height=800)
