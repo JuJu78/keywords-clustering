@@ -376,8 +376,7 @@ with st.expander("À propos"):
     3. **Configurez les paramètres** dans la barre latérale :
         - Entrez votre clé API OpenAI.
         - Choisissez les modèles d'embedding et de clustering.
-        - Définissez les valeurs de `eps` et `min_samples` pour l'algorithme DBSCAN.
-        - Définissez la taille des chunks de contenu.
+        - Définissez les valeurs de `eps` et `min_samples` pour l'algorithme DBSCAN
     4. **Cliquez sur "Lancer"** pour démarrer le traitement.
     5. Consultez et téléchargez les résultats :
         - Fichier Excel des données traitées.
